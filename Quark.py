@@ -1,14 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-File: enshan.py
-Author: WFRobert
-Date: 2023/9/1 1:09
-cron: 0 50 6 * * ?
-new Env('恩山论坛模拟登录脚本');
-Description: 恩山论坛模拟登录,每日登录获得+1恩山币
-Update: 2023/9/1 更新cron
-"""
 
 import datetime
 import os
