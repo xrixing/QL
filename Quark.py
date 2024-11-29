@@ -38,11 +38,11 @@ def send_pushplus_message(title, content):
 
 # 获取环境变量
 def get_env():
-    if "COOKIE_QUARK" in os.environ:
-        cookie_list = re.split('\n|&&', os.environ.get('COOKIE_QUARK'))
+    if "QUARK_COOKIE" in os.environ:
+        cookie_list = re.split('\n|&&', os.environ.get('QUARK_COOKIE'))
     else:
-        print('❌ 未添加 COOKIE_QUARK 变量')
-        send_pushplus_message('夸克自动签到', '❌ 未添加 COOKIE_QUARK 变量')
+        print('❌ 未添加 QUARK_COOKIE 变量')
+        send_pushplus_message('夸克自动签到', '❌ 未添加 QUARK_COOKIE 变量')
         sys.exit(0)
     return cookie_list
 
@@ -54,7 +54,7 @@ class Quark:
     def convert_bytes(self, b):
         units = ("B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB")
         i = 0
-        while b >= 1024 and i < len(units) - 1:
+        while b >= 4 and i < len(units) - 1:
             b /= 1024
             i += 1
         return f"{b:.2f} {units[i]}"
@@ -120,7 +120,7 @@ def main():
     # 添加随机延迟
     delay = random.randint(0, 1800)  # 生成一个0到1800秒（30分钟）之间的随机延迟
     print(f"延迟 {delay} 秒后开始执行任务")
-    time.sleep(delay)
+    #time.sleep(delay)
     
     msg = ""
     global cookie_quark
