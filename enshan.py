@@ -16,7 +16,7 @@ def validate_cookies(cookie_str):
         'rHEX_2132_saltkey',
         'rHEX_2132_auth',
         'rHEX_2132_client_token',
-        'waf_captcha_marker'
+        'https_waf_cookie'  # 已修正为实际存在的字段
     }
     cookies = {}
     for item in cookie_str.strip().split(';'):
@@ -100,6 +100,7 @@ def main():
         
         session = create_session(cookies)
         
+        # 模拟浏览器访问流程
         actions = [
             ('get', 'forum.php'),
             ('get', 'home.php?mod=spacecp'),
@@ -112,6 +113,7 @@ def main():
             res.raise_for_status()
             time.sleep(1)
         
+        # 获取积分信息
         profile_res = session.get('https://www.right.com.cn/FORUM/home.php?mod=spacecp', timeout=15)
         credits = extract_credits(profile_res.text)
         
@@ -121,9 +123,11 @@ def main():
         return notification
         
     except requests.exceptions.RequestException as e:
-        error_msg = format_notification("❌ 失败", 0).replace("✅", "❌")
+        error_msg = format_notification("❌ 网络请求失败", 0)
     except ValueError as e:
         error_msg = format_notification(f"❌ 数据异常（{str(e)}）", 0)
+    except RuntimeError as e:
+        error_msg = format_notification(f"❌ 安全验证失败（{str(e)}）", 0)
     except Exception as e:
         error_msg = format_notification(f"❌ 系统错误（{str(e)}）", 0)
     
