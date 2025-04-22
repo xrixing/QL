@@ -1,136 +1,134 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-import datetime
 import os
-import sys
-import urllib.parse
+import re
 import requests
-from bs4 import BeautifulSoup
 import time
-import random
+from urllib.parse import unquote
+from datetime import datetime
 
-def log_message(message, error=False):
-    if error:
-        print(f"ERROR: {message}")
-    else:
-        print(f"INFO: {message}")
+def get_env(name):
+    value = os.getenv(name)
+    if not value:
+        raise ValueError(f"环境变量 {name} 未配置")
+    return value
 
-def send_pushplus_message(title, content):
-    """发送 Pushplus 消息"""
-    pushplus_token = os.getenv('PUSHPLUS_TOKEN')
-    if not pushplus_token:
-        log_message("Pushplus token 未设置", error=True)
+def validate_cookies(cookie_str):
+    required_keys = {
+        'rHEX_2132_saltkey',
+        'rHEX_2132_auth',
+        'rHEX_2132_client_token',
+        'waf_captcha_marker'
+    }
+    cookies = {}
+    for item in cookie_str.strip().split(';'):
+        if '=' in item:
+            name, value = item.split('=', 1)
+            cookies[name.strip()] = unquote(value.strip())
+    missing = required_keys - cookies.keys()
+    if missing:
+        raise ValueError(f"缺少必要Cookie字段：{', '.join(missing)}")
+    return cookies
+
+def create_session(cookies):
+    session = requests.Session()
+    session.headers.update({
+        'authority': 'www.right.com.cn',
+        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'accept-language': 'zh-CN,zh;q=0.9',
+        'referer': 'https://www.right.com.cn/FORUM/',
+        'sec-ch-ua': '"Microsoft Edge";v="117", "Not;A=Brand";v="8", "Chromium";v="117"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36 Edg/117.0.2045.60',
+    })
+    
+    cookies['rHEX_2132_lastact'] = f"{int(time.time())}%09home.php%09space"
+    session.cookies.update(cookies)
+    
+    waf_check = session.get('https://www.right.com.cn/FORUM/forum.php', timeout=10)
+    if 'waf_verifying' in waf_check.text:
+        raise RuntimeError("触发WAF验证，请更新Cookie")
+    return session
+
+def extract_credits(html):
+    credit_patterns = [
+        r'id="extcreditmenu"[^>]*>积分: (\d+)',
+        r'积分:\s*</em>\s*(\d+)',
+        r'积分: <strong>(\d+)</strong>',
+        r'积分: (\d+)'
+    ]
+    for pattern in credit_patterns:
+        match = re.search(pattern, html)
+        if match:
+            return match.group(1)
+    with open('debug_page.html', 'w', encoding='utf-8') as f:
+        f.write(html)
+    raise ValueError("积分解析失败，已保存调试页面")
+
+def format_notification(status, credits):
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return f"""
+🔔 恩山论坛签到结果（账号1）
+
+├ 状态: {status}
+├ 奖励: {credits} 积分
+└ 时间: {current_time}
+""".strip()
+
+def push_notification(content):
+    token = os.getenv('PUSHPLUS_TOKEN')
+    if not token:
         return
-    url = 'http://www.pushplus.plus/send'
-    data = {
-        "token": pushplus_token,
-        "title": title,
-        "content": content
-    }
-    response = requests.post(url, json=data)
-    if response.status_code == 200:
-        log_message("Pushplus 消息发送成功")
-    else:
-        log_message("Pushplus 消息发送失败", error=True)
-
-def user_data(cookie):
-    """获取用户信息"""
-    url = 'https://www.right.com.cn/FORUM/home.php?mod=spacecp&ac=credit&op=base'
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36 Edg/116.0.1938.62',
-        'Referer': 'https://www.right.com.cn/FORUM/home.php?mod=spacecp&ac=credit&showcredit=1',
-        'Cookie': cookie
-    }
-    response = requests.get(url, headers=headers)
-    status_code = response.status_code
-    if status_code == 200:
-        soup = BeautifulSoup(response.content.decode('utf-8'), "html.parser")
-        user_name = soup.find('a', attrs={'title': '访问我的空间'}).text  # 用户名
-        points = soup.find('a', attrs={'id': 'extcreditmenu'}).text  # 目前积分
-        user_group = soup.find('a', attrs={'id': 'g_upmine'}).text  # 用户组
-        log_message(f"模拟登录成功---{user_name}---{points}---{user_group}")
-        return f"模拟登录成功---{user_name}---{points}---{user_group}"
-    else:
-        log_message(f"账号可能cookie过期了", error=True)
-        return "账号可能cookie过期了"
-
-def sign_in(number, cookie):
-    """开启模拟登录"""
-    cookie = urllib.parse.unquote(cookie)
-    cookie_list = cookie.split(";")
-    parsed_cookie = ''
-    for i in cookie_list:
-        parts = i.split("=", 1)
-        key = parts[0].strip()
-        if key == "rHEX_2132_saltkey":
-            parsed_cookie += f"rHEX_2132_saltkey={urllib.parse.quote(parts[1])}; "
-        if key == "rHEX_2132_auth":
-            parsed_cookie += f"rHEX_2132_auth={urllib.parse.quote(parts[1])}; "
-    if not ('rHEX_2132_saltkey' in parsed_cookie and 'rHEX_2132_auth' in parsed_cookie):
-        log_message(f"第{number}cookie中未包含rHEX_2132_saltkey或rHEX_2132_auth字段，请检查cookie", error=True)
-        sys.exit()
     
-    url = "https://www.right.com.cn/forum/home.php?mod=spacecp&ac=credit&op=log&suboperation=creditrulelog"
-    headers = {
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
-        "Cookie": parsed_cookie,
-        "Host": "www.right.com.cn",
-        "Pragma": "no-cache",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-        "Upgrade-Insecure-Requests": "1",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36 Edg/115.0.1901.200",
-        "sec-ch-ua": "\"Not/A)Brand\";v=\"99\", \"Microsoft Edge\";v=\"115\", \"Chromium\";v=\"115\"",
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": "\"Windows\""
-    }
-    
-    r = requests.get(url, headers=headers)
-    if r.status_code == 200:
-        soup = BeautifulSoup(r.text, "html.parser")
-        trs = soup.find("table", summary="积分获得历史").find_all("tr")
-        for tr in trs:
-            tds = tr.find_all("td")
-            if len(tds) == 0:
-                continue
-            if tds[0].text == "每天登录" and tds[5].text[:10] == datetime.datetime.now().strftime("%Y-%m-%d"):
-                log_message("模拟登录成功")
-                user_info = user_data(parsed_cookie)  # 获取用户信息
-                return f"账号 {number} 模拟登录成功: {user_info}"
-        else:
-            log_message("模拟登录失败", error=True)
-            return f"账号 {number} 模拟登录失败"
-    else:
-        log_message("账号可能cookie过期", error=True)
-        return f"账号 {number} 账号可能cookie过期"
+    try:
+        requests.post(
+            'http://www.pushplus.plus/send',
+            json={
+                "token": token,
+                "title": "🔔 恩山论坛签到通知",
+                "content": content,
+                "template": "markdown"
+            },
+            timeout=10
+        )
+    except Exception as e:
+        print(f"推送失败：{str(e)}")
 
 def main():
-    """主方法，开始模拟登录"""
-    log_message("开始获取Cookie\n")
-
-    # 增加随机等待时间（0到10分钟）
-    wait_time = random.randint(0, 10 * 60)
-    log_message(f"随机等待时间：{wait_time // 60} 分钟 {wait_time % 60} 秒")
-    time.sleep(wait_time)
+    try:
+        cookie_str = get_env('ENSHAN_COOKIE')
+        cookies = validate_cookies(cookie_str)
+        
+        session = create_session(cookies)
+        
+        actions = [
+            ('get', 'forum.php'),
+            ('get', 'home.php?mod=spacecp'),
+            ('get', 'home.php?mod=space&do=notice')
+        ]
+        
+        for method, path in actions:
+            url = f'https://www.right.com.cn/FORUM/{path}'
+            res = getattr(session, method)(url, timeout=15)
+            res.raise_for_status()
+            time.sleep(1)
+        
+        profile_res = session.get('https://www.right.com.cn/FORUM/home.php?mod=spacecp', timeout=15)
+        credits = extract_credits(profile_res.text)
+        
+        # 构建通知内容
+        notification = format_notification("✅ 成功", credits)
+        push_notification(notification)
+        return notification
+        
+    except requests.exceptions.RequestException as e:
+        error_msg = format_notification("❌ 失败", 0).replace("✅", "❌")
+    except ValueError as e:
+        error_msg = format_notification(f"❌ 数据异常（{str(e)}）", 0)
+    except Exception as e:
+        error_msg = format_notification(f"❌ 系统错误（{str(e)}）", 0)
     
-    if os.environ.get("ENSHAN_COOKIE"):
-        cookies = os.environ.get("ENSHAN_COOKIE")
-    else:
-        log_message("请在环境变量填写ENSHAN_COOKIE的值", error=True)
-        sys.exit()  # 未获取到cookie，退出系统
-    
-    for number, cookie in enumerate(cookies.split("&")):
-        log_message(f"开始执行第{number + 1}个账号")
-        result_message = sign_in(number + 1, cookie)  # 模拟登录
-        send_pushplus_message("恩山论坛签到结果", result_message)
+    push_notification(error_msg)
+    return error_msg
 
-if __name__ == '__main__':
-    main()  # 主方法
-    log_message("恩山论坛登录任务已完成")
+if __name__ == "__main__":
+    print(main())
