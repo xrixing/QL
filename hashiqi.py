@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-哈士奇签到脚本（回车分隔Cookie版）
-更新时间：2025-03-29
+哈士奇签到脚本（无延迟快速版）
+更新时间：2024-03-29
 特点：
-1. 支持回车/换行分隔的多账号Cookie
-2. 保留1-30分钟随机延迟
-3. 完整PushPlus通知
+1. 去除所有延迟，快速执行
+2. 优化结果解析逻辑
+3. 增强错误处理
 """
 import os
 import time
-import random
 import requests
 
 def load_config():
-    """加载配置（支持回车分隔Cookie）"""
+    """加载配置"""
     config = {
         "cookies": [],
         "pushplus_token": os.getenv("PUSHPLUS_TOKEN", "").strip()
@@ -23,38 +22,23 @@ def load_config():
     raw_cookies = os.getenv("HASHIQI_COOKIES", "")
     if not raw_cookies:
         print("❌ 错误：未检测到HASHIQI_COOKIES环境变量")
-        print("💡 配置指南：")
-        print("1. 在青龙面板添加环境变量")
-        print("2. 值填写格式（直接换行不用||符号）：")
-        print('''ASP.NET_SessionId=xxx;其他cookie
-ASP.NET_SessionId=yyy;其他cookie''')
         return None
     
-    # 支持\n和\r\n两种换行符
-    cookies = [line.strip() for line in raw_cookies.splitlines() if line.strip()]
-    valid_cookies = [c for c in cookies if "ASP.NET_SessionId" in c]
+    config["cookies"] = [c.strip() for c in raw_cookies.splitlines() if c.strip() and "ASP.NET_SessionId" in c]
     
-    if not valid_cookies:
-        print("❌ 错误：未找到有效的Cookie格式")
-        print("💡 必须包含ASP.NET_SessionId字段")
+    if not config["cookies"]:
+        print("❌ 错误：没有有效的Cookie")
         return None
     
-    config["cookies"] = valid_cookies
     return config
 
-NOTIFICATION_TEMPLATE = """
-🔔 哈士奇签到结果（账号{account_num}）
-├ 状态: {status}
-├ 详情: {message}
-└ 时间: {time}
-"""
-
 def send_notification(title, content, token):
-    """发送PushPlus通知"""
+    """发送通知"""
     if not token:
         return False
+    
     try:
-        requests.post(
+        resp = requests.post(
             "http://www.pushplus.plus/send",
             json={
                 "token": token,
@@ -64,80 +48,128 @@ def send_notification(title, content, token):
             },
             timeout=10
         )
-        return True
+        return resp.status_code == 200
     except:
         return False
 
+def create_session(cookie):
+    """创建请求会话"""
+    session = requests.Session()
+    session.headers.update({
+        "Cookie": cookie,
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
+        "Referer": "https://vip.ioshashiqi.com/aspx3/mobile/qiandao.aspx"
+    })
+    return session
+
 def do_sign(session):
-    """执行签到核心逻辑"""
+    """执行签到"""
     try:
         # 获取签到页面
-        html = session.get(
-            "https://vip.ioshashiqi.com/aspx3/mobile/qiandao.aspx?action=list&s=&no="
-        ).text
+        list_url = "https://vip.ioshashiqi.com/aspx3/mobile/qiandao.aspx?action=list"
+        response = session.get(list_url, timeout=15)
         
-        # 提取表单参数
-        viewstate = html.split('id="__VIEWSTATE" value="')[1].split('"')[0]
-        generator = html.split('id="__VIEWSTATEGENERATOR" value="')[1].split('"')[0]
+        # 检查是否需要登录
+        if "login.aspx" in response.text.lower():
+            return False, "Cookie已失效"
+        
+        # 尝试解析表单
+        viewstate = response.text.split('id="__VIEWSTATE" value="')[1].split('"')[0] if '__VIEWSTATE' in response.text else ""
+        generator = response.text.split('id="__VIEWSTATEGENERATOR" value="')[1].split('"')[0] if '__VIEWSTATEGENERATOR' in response.text else ""
+        
+        if not viewstate:
+            return False, "无法获取表单参数"
         
         # 提交签到
-        response = session.post(
+        post_data = {
+            "__VIEWSTATE": viewstate,
+            "__VIEWSTATEGENERATOR": generator,
+            "__EVENTTARGET": "_lbtqd",
+            "__EVENTARGUMENT": ""
+        }
+        
+        sign_response = session.post(
             "https://vip.ioshashiqi.com/aspx3/mobile/qiandao.aspx",
-            data={
-                "__VIEWSTATE": viewstate,
-                "__VIEWSTATEGENERATOR": generator,
-                "__EVENTTARGET": "_lbtqd",
-                "__EVENTARGUMENT": ""
-            },
-            headers={"Content-Type": "application/x-www-form-urlencoded"}
+            data=post_data,
+            timeout=20
         )
         
-        # 解析结果
-        if 'id="lblprice"' not in response.text:
-            return False, "结果解析失败"
-        return True, response.text.split('id="lblprice">')[1].split("<")[0].strip()
+        # 解析结果（新增多种匹配方式）
+        if 'id="lblprice"' in sign_response.text:
+            result = sign_response.text.split('id="lblprice">')[1].split("<")[0].strip()
+            return True, result
+        elif "今天已签到" in sign_response.text:
+            return True, "今日已签到"
+        elif "签到成功" in sign_response.text:
+            return True, "签到成功"
+        else:
+            return False, "无法解析签到结果"
+            
     except Exception as e:
         return False, f"请求异常: {str(e)}"
 
 def main():
     print("="*50)
-    print("  哈士奇签到脚本（回车分隔版）")
+    print("  哈士奇签到脚本（快速版）")
+    print(f"  开始时间: {time.strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*50)
     
     config = load_config()
     if not config:
         return
     
+    results = []
     for idx, cookie in enumerate(config["cookies"], 1):
         print(f"\n🔄 处理账号 {idx}/{len(config['cookies'])}")
         
-        # 随机延迟
-        delay = random.randint(60, 1800)
-        print(f"⏳ 延迟 {delay//60}分{delay%60}秒")
-        #time.sleep(delay)
-        
-        # 创建会话
-        session = requests.Session()
-        session.headers = {
-            "Cookie": cookie,
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
-        }
-        
-        # 执行签到
-        success, msg = do_sign(session)
-        notification = NOTIFICATION_TEMPLATE.format(
-            account_num=idx,
-            status="✅ 成功" if success else "❌ 失败",
-            message=msg,
-            time=time.strftime("%Y-%m-%d %H:%M:%S")
-        )
-        
-        print(notification)
+        try:
+            session = create_session(cookie)
+            success, msg = do_sign(session)
+            
+            result = {
+                "account": idx,
+                "status": "成功" if success else "失败",
+                "message": msg
+            }
+            results.append(result)
+            
+            print(f"✔️ 结果: {result['status']} - {msg}")
+            
+            # 发送单个账号通知
+            if config["pushplus_token"]:
+                notification = f"""
+哈士奇签到结果（账号{idx}）
+状态: {'✅ 成功' if success else '❌ 失败'}
+详情: {msg}
+时间: {time.strftime('%Y-%m-%d %H:%M:%S')}
+                """
+                send_notification(
+                    title=f"哈士奇签到{'成功' if success else '失败'}",
+                    content=notification,
+                    token=config["pushplus_token"]
+                )
+                
+        except Exception as e:
+            print(f"❌ 发生异常: {str(e)}")
+            results.append({
+                "account": idx,
+                "status": "异常",
+                "message": str(e)
+            })
+    
+    # 发送汇总通知
+    if config["pushplus_token"] and results:
+        summary = "\n".join([
+            f"账号{r['account']}: {r['status']} - {r['message']}" 
+            for r in results
+        ])
         send_notification(
-            title=f"哈士奇签到{'成功' if success else '失败'}",
-            content=notification,
+            title=f"哈士奇签到汇总（{len([r for r in results if r['status']=='成功'])}/{len(results)}成功）",
+            content=summary,
             token=config["pushplus_token"]
         )
 
 if __name__ == '__main__':
-    main() 
+    start_time = time.time()
+    main()
+    print(f"\n🕒 总耗时: {time.time() - start_time:.2f}秒")
